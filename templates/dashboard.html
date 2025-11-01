@@ -1,0 +1,193 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Neura.AI v1.1 — Dashboard</title>
+  <link rel="stylesheet" href="/static/style.css" />
+  <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
+  <script src="https://unpkg.com/axios/dist/axios.min.js"></script>
+  <style>
+    body { font-family: Inter, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial; margin:0; background:#0f1724; color:#e6eef8; }
+    .container { padding: 18px; max-width: 1200px; margin:auto;}
+    header { display:flex; justify-content:space-between; align-items:center; margin-bottom:14px; }
+    .controls { display:flex; gap:10px; align-items:center; }
+    .card { background: rgba(255,255,255,0.03); padding:12px; border-radius:8px; margin-bottom:12px; }
+    .flex { display:flex; gap:12px; }
+    #main-chart { height:520px; background:#081022; border-radius:8px; padding:8px }
+    table { width:100%; border-collapse:collapse; }
+    th, td { padding:6px 8px; border-bottom:1px solid rgba(255,255,255,0.04); font-size:13px; }
+    .btn { padding:8px 10px; border-radius:6px; background:#0ea5a2; color:#012; cursor:pointer; border:none; }
+    .btn.secondary { background:#334155; color:#e6eef8 }
+    .small { font-size:12px; padding:6px 8px; }
+    .muted { color:#9fb0c8 }
+    .row { display:flex; gap:12px; align-items:center; }
+    .symbol-select, .tf-select { padding:6px 8px; border-radius:6px; background:rgba(255,255,255,0.02); color:#e6eef8; border:1px solid rgba(255,255,255,0.03) }
+    .search { width:240px; }
+    #tradingview-widget { height:420px; border-radius:8px; overflow:hidden; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <header>
+      <div>
+        <h1>Neura.AI v1.1</h1>
+        <div class="muted">EMA9 / EMA15 Retest + RandomForest | 1:2 RR</div>
+      </div>
+      <div class="controls">
+        <select id="symbol" class="symbol-select"></select>
+        <select id="timeframe" class="tf-select">
+          <option value="M1">M1</option>
+          <option value="M5">M5</option>
+          <option value="M15" selected>M15</option>
+          <option value="H1">H1</option>
+        </select>
+        <button class="btn" id="refreshBtn">Refresh</button>
+        <button class="btn secondary" id="retrainBtn">Retrain Model</button>
+        <button class="btn secondary" id="exportBtn">Export CSV</button>
+      </div>
+    </header>
+
+    <div class="flex">
+      <div style="flex:2">
+        <div id="tradingview-widget" class="card">
+          <iframe id="tv" style="width:100%; height:100%; border:0;"
+            src="https://s.tradingview.com/widgetembed/?frameElementId=tradingview_a1d8f&symbol=XAUUSD&interval=15&hidetoptoolbar=1&saveimage=1&toolbarbg=f1f3f6&studies=[]"></iframe>
+        </div>
+
+        <div id="main-chart" class="card" style="margin-top:12px;">
+          <div id="plotly-chart" style="height:100%;"></div>
+        </div>
+      </div>
+
+      <div style="flex:1">
+        <div class="card">
+          <h3>Next Trade Prediction</h3>
+          <div id="nextTrade" class="muted">Loading...</div>
+        </div>
+
+        <div class="card" style="margin-top:12px;">
+          <h3>Trade History (filters)</h3>
+          <div class="row" style="margin-bottom:8px;">
+            <input type="date" id="date_from" />
+            <input type="date" id="date_to" />
+            <button id="filterBtn" class="small btn secondary">Filter</button>
+          </div>
+          <div style="max-height:420px; overflow:auto;">
+            <table id="historyTable">
+              <thead><tr><th>sym</th><th>dir</th><th>entry</th><th>exit</th><th>pnl$</th><th>view</th></tr></thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div id="mini-retest" class="card" style="display:none; margin-top:12px;">
+      <h3>Retest Chart</h3>
+      <div id="retest-plot" style="height:360px;"></div>
+    </div>
+  </div>
+
+<script>
+document.addEventListener('DOMContentLoaded', async () => {
+  let symbolList = {{ symbols|tojson }};
+  const symSelect = document.getElementById('symbol');
+  
+  // Populate dropdown safely
+  if (Array.isArray(symbolList)) {
+    symbolList.forEach(s => {
+      const opt = document.createElement('option');
+      opt.value = s;
+      opt.textContent = s;
+      symSelect.appendChild(opt);
+    });
+  }
+
+  document.getElementById('refreshBtn').addEventListener('click', refreshAll);
+  document.getElementById('retrainBtn').addEventListener('click', retrainModel);
+  document.getElementById('exportBtn').addEventListener('click', () => window.location='/api/export');
+  document.getElementById('filterBtn').addEventListener('click', loadHistory);
+
+  symSelect.value = 'XAUUSD';
+  await refreshAll();
+  await loadHistory();
+  setInterval(refreshAll, 30000); // auto refresh
+});
+
+async function refreshAll() {
+  const sym = document.getElementById('symbol').value || 'XAUUSD';
+  const tf = document.getElementById('timeframe').value || 'M15';
+  try {
+    const r = await axios.get(`/api/candles?symbol=${sym}&timeframe=${tf}`);
+    const data = r.data.data;
+    drawPlot(data);
+    await loadPrediction(sym, tf);
+  } catch (e) { console.error(e); alert('Error refreshing data'); }
+}
+
+async function loadPrediction(sym='XAUUSD', tf='M15') {
+  try {
+    const r = await axios.get(`/api/predict?symbol=${sym}&timeframe=${tf}`);
+    const payload = r.data;
+    const sug = payload.suggestion;
+    const nextDiv = document.getElementById('nextTrade');
+    if (!sug) {
+      nextDiv.innerHTML = '<div class="muted">No current suggestion</div>';
+      return;
+    }
+    nextDiv.innerHTML = `<b style="font-size:16px">${sug.direction} @ ${sug.entry_price}</b><br/>SL ${sug.sl} TP ${sug.tp}<br/>AI Conf: ${sug.ai_prob || 'N/A'}%`;
+  } catch (e) { console.error(e); }
+}
+
+function drawPlot(data) {
+  if (!data || data.length === 0) return;
+  const times = data.map(d => d.time);
+  const opens = data.map(d => d.open);
+  const highs = data.map(d => d.high);
+  const lows = data.map(d => d.low);
+  const closes = data.map(d => d.close);
+  const ema9 = data.map(d => d.EMA9);
+  const ema15 = data.map(d => d.EMA15);
+  
+  const traceCandle = { x: times, open: opens, high: highs, low: lows, close: closes, type: 'candlestick', name: 'price' };
+  const t9 = { x: times, y: ema9, mode: 'lines', name: 'EMA9', line: { width: 1 } };
+  const t15 = { x: times, y: ema15, mode: 'lines', name: 'EMA15', line: { width: 1 } };
+  
+  Plotly.newPlot('plotly-chart', [traceCandle, t9, t15], { margin: { t: 10 }, showlegend: true });
+}
+
+async function loadHistory() {
+  const from = document.getElementById('date_from').value;
+  const to = document.getElementById('date_to').value;
+  let url = '/api/history';
+  if (from || to) url += `?start=${from}&end=${to}`;
+  const r = await axios.get(url);
+  const data = r.data.data || [];
+  const tbody = document.querySelector('#historyTable tbody');
+  tbody.innerHTML = '';
+  data.forEach((tr, idx) => {
+    const row = document.createElement('tr');
+    row.innerHTML = `<td>${tr.symbol}</td><td>${tr.direction}</td><td>${tr.entry_time}</td><td>${tr.exit_time}</td><td>${tr.pnl_usd}</td><td><button onclick="viewRetest(${idx})">View</button></td>`;
+    tbody.appendChild(row);
+  });
+  window._history = data;
+}
+
+function viewRetest(index) {
+  const tr = window._history[index];
+  if (!tr) return;
+  axios.get(`/api/candles?symbol=${tr.symbol}&timeframe=M15&count=200`).then(res => {
+    const data = res.data.data;
+    const times = data.map(d => d.time);
+    const closes = data.map(d => d.close);
+    const trace = { x: times, y: closes, mode: 'lines', name: 'price' };
+    const entry = { x: [tr.entry_time], y: [tr.entry_price], mode: 'markers+text', marker: { color: 'lime', size: 10 }, text: ['Entry'], textposition: 'top center' };
+    const exit = { x: [tr.exit_time], y: [tr.exit_price], mode: 'markers+text', marker: { color: 'red', size: 10 }, text: ['Exit'], textposition: 'bottom center' };
+    Plotly.newPlot('retest-plot', [trace, entry, exit], { margin: { t: 10 } });
+    document.getElementById('mini-retest').style.display = 'block';
+  });
+}
+</script>
+</body>
+</html>

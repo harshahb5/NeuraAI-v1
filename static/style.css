@@ -1,0 +1,9 @@
+/* static/style.css */
+:root{
+  --bg:#071226; --card:#071a2b; --muted:#93b0c6; --accent:#06b6d4; --text:#e6eef8;
+}
+body{ background:var(--bg); color:var(--text); font-family:Inter,system-ui,-apple-system; margin:0}
+.container{ max-width:1200px; margin:20px auto; padding:14px }
+.card{ background:rgba(255,255,255,0.02); border-radius:8px; padding:12px; box-shadow:0 6px 18px rgba(0,0,0,0.4) }
+.btn{ background:var(--accent); color:#021; border:none; border-radius:6px; padding:8px 10px; cursor:pointer }
+.small{ padding:6px 8px; font-size:13px; }

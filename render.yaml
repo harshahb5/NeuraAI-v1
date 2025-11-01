@@ -1,0 +1,10 @@
+# render.yaml
+services:
+  - type: web
+    name: neura-ai-v5
+    env: docker
+    plan: free
+    autoDeploy: true
+    region: oregon
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /
